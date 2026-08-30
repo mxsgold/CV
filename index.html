@@ -3,13 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Face Mesh Test</title>
+  <title>Face Mesh Fix</title>
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0;
       padding: 0;
       background: #000;
+      color: #fff;
       width: 100vw;
       height: 100vh;
       overflow: hidden;
@@ -23,117 +24,138 @@
       justify-content: center;
       align-items: center;
     }
-    /* Видео снизу */
-    video {
+    video, canvas {
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
       object-fit: cover;
-      z-index: 1;
     }
-    /* Сетка поверх видео */
-    canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      z-index: 2;
-    }
-    /* Индикатор статуса */
+    canvas { z-index: 2; }
+    video { z-index: 1; }
+    
     #status {
       position: absolute;
       top: 20px;
       left: 50%;
       transform: translateX(-50%);
-      z-index: 3;
-      background: rgba(0, 0, 0, 0.7);
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.85);
       color: #00FF66;
-      padding: 8px 16px;
+      padding: 10px 20px;
       border-radius: 20px;
       font-size: 14px;
       border: 1px solid #00FF66;
+      text-align: center;
+      max-width: 90%;
+    }
+    #startBtn {
+      position: absolute;
+      z-index: 20;
+      padding: 16px 32px;
+      background: #00FF66;
+      color: #000;
+      font-weight: bold;
+      border: none;
+      border-radius: 30px;
+      font-size: 18px;
+      box-shadow: 0 0 15px rgba(0,255,102,0.4);
     }
   </style>
 
-  <!-- Закрепленные стабильные версии MediaPipe -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.4/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.4/drawing_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js" crossorigin="anonymous"></script>
+  <!-- Подключаем библиотеки MediaPipe -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
 <div class="container">
-  <div id="status">Загрузка модели...</div>
+  <div id="status">Нажмите кнопку снизу для запуска</div>
+  <button id="startBtn">Включить камеру</button>
   <video id="webcam" playsinline autoplay muted></video>
   <canvas id="output_canvas"></canvas>
 </div>
 
 <script>
+  const statusDiv = document.getElementById('status');
+  const startBtn = document.getElementById('startBtn');
   const videoElement = document.getElementById('webcam');
   const canvasElement = document.getElementById('output_canvas');
   const canvasCtx = canvasElement.getContext('2d');
-  const statusDiv = document.getElementById('status');
 
-  const faceMesh = new FaceMesh({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`
-  });
+  // Вывод любых скриптовых ошибок прямо на экран
+  window.onerror = function(msg) {
+    statusDiv.style.color = '#FF3333';
+    statusDiv.style.borderColor = '#FF3333';
+    statusDiv.innerText = "Ошибка: " + msg;
+  };
 
-  faceMesh.setOptions({
-    maxNumFaces: 1,
-    refineLandmarks: true,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-  });
+  startBtn.addEventListener('click', async () => {
+    startBtn.style.display = 'none';
+    statusDiv.innerText = "Запрос разрешения камеры...";
 
-  let modelReady = false;
+    try {
+      // Прямой запрос разрешения камеры по нажатию кнопки
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      videoElement.srcObject = stream;
+      await videoElement.play();
 
-  faceMesh.onResults((results) => {
-    if (!modelReady) {
-      modelReady = true;
-      statusDiv.innerText = "Поиск лица...";
-    }
+      statusDiv.innerText = "Загрузка нейросети MediaPipe...";
 
-    // Подстройка разрешения Canvas под видеокадр
-    if (videoElement.videoWidth && videoElement.videoHeight) {
-      if (canvasElement.width !== videoElement.videoWidth) {
-        canvasElement.width = videoElement.videoWidth;
-        canvasElement.height = videoElement.videoHeight;
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      faceMesh.onResults((results) => {
+        if (canvasElement.width !== videoElement.videoWidth) {
+          canvasElement.width = videoElement.videoWidth;
+          canvasElement.height = videoElement.videoHeight;
+        }
+
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+          statusDiv.innerText = "Лицо найдено ✓";
+          for (const landmarks of results.multiFaceLandmarks) {
+            drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELLATION, {
+              color: '#00FF66',
+              lineWidth: 1.5
+            });
+          }
+        } else {
+          statusDiv.innerText = "Поиск лица в кадре...";
+        }
+        canvasCtx.restore();
+      });
+
+      // Цикл отправки кадров в нейросеть
+      async function renderFrame() {
+        if (!videoElement.paused && !videoElement.ended) {
+          await faceMesh.send({image: videoElement});
+        }
+        requestAnimationFrame(renderFrame);
       }
+      renderFrame();
+
+    } catch (err) {
+      statusDiv.style.color = '#FF3333';
+      statusDiv.style.borderColor = '#FF3333';
+      statusDiv.innerText = "Доступ к камере отклонен: " + err.message;
     }
-
-    canvasCtx.save();
-    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-
-    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-      statusDiv.innerText = "Лицо найдено ✓";
-      for (const landmarks of results.multiFaceLandmarks) {
-        // Отрисовка сетки
-        drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELLATION, {
-          color: '#00FF66',
-          lineWidth: 1.5
-        });
-      }
-    } else if (modelReady) {
-      statusDiv.innerText = "Поиск лица...";
-    }
-
-    canvasCtx.restore();
   });
-
-  const camera = new Camera(videoElement, {
-    onFrame: async () => {
-      await faceMesh.send({image: videoElement});
-    },
-    facingMode: 'user',
-    width: 1280,
-    height: 720
-  });
-
-  camera.start();
 </script>
 </body>
 </html>
