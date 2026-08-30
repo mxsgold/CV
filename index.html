@@ -3,24 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Face Mesh & Hands</title>
+  <title>Face & Hands Pro</title>
   <style>
     body { margin: 0; background: #000; overflow: hidden; color: #fff; font-family: sans-serif; }
     video, canvas { position: absolute; width: 100vw; height: 100vh; object-fit: cover; }
     video { z-index: 1; }
     canvas { z-index: 2; pointer-events: none; }
     
-    /* Статус лица (сверху) */
     #status {
       position: absolute; top: 15px; left: 50%; transform: translateX(-50%); z-index: 10;
-      background: rgba(0,0,0,0.7); color: #0FF; padding: 8px 15px; border-radius: 12px; 
-      font-size: 14px; border: 1px solid #0FF; white-space: nowrap;
+      background: rgba(0,0,0,0.8); color: #0FF; padding: 10px 15px; border-radius: 12px; 
+      font-size: 14px; border: 1px solid #0FF; white-space: nowrap; text-align: center;
     }
     
-    /* Счетчик пальцев (снизу по центру) */
     #fingerCounter {
       position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 15;
-      background: rgba(0,0,0,0.85); color: #FF3333; padding: 15px 30px; border-radius: 20px; 
+      background: rgba(0,0,0,0.9); color: #FF3333; padding: 15px 30px; border-radius: 20px; 
       font-size: 24px; font-weight: bold; border: 2px solid #FF3333; text-transform: uppercase;
       box-shadow: 0 0 15px rgba(255,51,51,0.5); text-align: center; white-space: nowrap;
     }
@@ -32,14 +30,14 @@
     }
   </style>
 
-  <!-- Подключаем обе нейросети: для Лица и для Рук -->
+  <!-- Библиотеки -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
   <div id="status">Ожидание запуска...</div>
-  <div id="fingerCounter" style="display: none;"></div> <!-- Скрыт до запуска -->
+  <div id="fingerCounter" style="display: none;">ЖДИТЕ...</div>
   <button id="btn">Запустить сканер</button>
   
   <video id="video" playsinline autoplay muted></video>
@@ -54,8 +52,6 @@
     const btn = document.getElementById('btn');
 
     let framesCount = 0;
-    
-    // Переменные для хранения последних данных от нейросетей
     let latestFace = null;
     let latestHands = null;
 
@@ -69,108 +65,130 @@
         video.srcObject = stream;
         
         video.onloadeddata = async () => {
-          status.innerText = "Грузим ИИ (Лицо + Руки)...";
-          video.play();
+          await video.play().catch(e => console.log(e));
           
-          // --- 1. НАСТРОЙКА ЛИЦА ---
-          const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-          faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
-          faceMesh.onResults((res) => { latestFace = res; });
+          try {
+            // Инициализация моделей
+            status.innerText = "Подготовка ИИ...";
+            
+            const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+            faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+            faceMesh.onResults((res) => { latestFace = res; });
 
-          // --- 2. НАСТРОЙКА РУК ---
-          const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-          hands.setOptions({ maxNumHands: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
-          hands.onResults((res) => { latestHands = res; });
+            const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+            hands.setOptions({ maxNumHands: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+            hands.onResults((res) => { latestHands = res; });
 
-          // --- 3. ГЛАВНЫЙ ЦИКЛ ОТРИСОВКИ ---
+            // ПРОГРЕВ (Именно тут скачиваются файлы, делаем по очереди)
+            status.innerText = "Прогрев Лица (1/2) - ждите...";
+            await faceMesh.send({ image: video });
+            
+            status.innerText = "Прогрев Рук (2/2) - ждите...";
+            await hands.send({ image: video });
+            
+          } catch (initErr) {
+            status.innerText = "Ошибка загрузки ИИ: " + initErr.message;
+            status.style.color = 'red';
+            return; // Останавливаем, если телефон не потянул
+          }
+
+          status.innerText = "Запуск успешно завершен!";
+          
+          // ГЛАВНЫЙ ЦИКЛ
           async function processVideo() {
-            if (!video.paused && !video.ended) {
-              framesCount++;
-              
-              // Отправляем кадр по очереди в обе нейросети
-              await faceMesh.send({ image: video });
-              await hands.send({ image: video });
-              
-              // Выравниваем холст
-              if (canvas.width !== video.videoWidth) {
-                canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-              }
-              ctx.clearRect(0, 0, canvas.width, canvas.height);
-              
-              // === РИСУЕМ ПОЛИГОНАЛЬНОЕ ЛИЦО ===
-              if (latestFace && latestFace.multiFaceLandmarks && latestFace.multiFaceLandmarks.length > 0) {
-                status.innerText = `[Кадр: ${framesCount}] Сетка активна ✓`;
-                status.style.color = '#00FF00'; status.style.borderColor = '#00FF00';
+            try {
+              if (!video.paused && !video.ended) {
+                framesCount++;
                 
-                const faceLms = latestFace.multiFaceLandmarks[0];
-                ctx.strokeStyle = '#00FF66'; // Неоново-зеленая сетка
-                ctx.lineWidth = 0.8;
+                // Запускаем анализ
+                await faceMesh.send({ image: video });
+                await hands.send({ image: video });
                 
-                // Рисуем линии по встроенной карте (FACEMESH_TESSELLATION)
-                ctx.beginPath();
-                for (const connection of FACEMESH_TESSELLATION) {
-                  const start = faceLms[connection[0]];
-                  const end = faceLms[connection[1]];
-                  ctx.moveTo(start.x * canvas.width, start.y * canvas.height);
-                  ctx.lineTo(end.x * canvas.width, end.y * canvas.height);
+                if (canvas.width !== video.videoWidth) {
+                  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
                 }
-                ctx.stroke();
-              } else {
-                status.innerText = `[Кадр: ${framesCount}] Ищу лицо...`;
-                status.style.color = '#FFCC00'; status.style.borderColor = '#FFCC00';
-              }
-
-              // === СЧИТАЕМ И РИСУЕМ ПАЛЬЦЫ ===
-              let openFingers = 0;
-              
-              if (latestHands && latestHands.multiHandLandmarks && latestHands.multiHandLandmarks.length > 0) {
-                const handLms = latestHands.multiHandLandmarks[0];
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
-                // Рисуем точки на суставах руки (чтобы было видно, что трекинг идет)
-                ctx.fillStyle = '#FF00FF'; // Розовые точки для рук
-                for (let i = 0; i < handLms.length; i++) {
-                  ctx.beginPath();
-                  ctx.arc(handLms[i].x * canvas.width, handLms[i].y * canvas.height, 4, 0, 2*Math.PI);
-                  ctx.fill();
+                // === РИСУЕМ ЛИЦО ===
+                if (latestFace && latestFace.multiFaceLandmarks && latestFace.multiFaceLandmarks.length > 0) {
+                  status.innerText = `[Кадр: ${framesCount}] Сканирование ✓`;
+                  status.style.color = '#00FF00'; status.style.borderColor = '#00FF00';
+                  
+                  const faceLms = latestFace.multiFaceLandmarks[0];
+                  ctx.strokeStyle = '#00FF66';
+                  ctx.lineWidth = 1;
+                  
+                  // Защита: если полигоны доступны - рисуем сетку, иначе рисуем точки
+                  if (typeof FACEMESH_TESSELLATION !== 'undefined') {
+                    ctx.beginPath();
+                    for (const connection of FACEMESH_TESSELLATION) {
+                      const start = faceLms[connection[0]];
+                      const end = faceLms[connection[1]];
+                      ctx.moveTo(start.x * canvas.width, start.y * canvas.height);
+                      ctx.lineTo(end.x * canvas.width, end.y * canvas.height);
+                    }
+                    ctx.stroke();
+                  } else {
+                    ctx.fillStyle = '#00FF66';
+                    for (let i = 0; i < faceLms.length; i+=2) {
+                      ctx.beginPath(); ctx.arc(faceLms[i].x * canvas.width, faceLms[i].y * canvas.height, 2, 0, 2*Math.PI); ctx.fill();
+                    }
+                  }
+                } else {
+                  status.innerText = `[Кадр: ${framesCount}] Ищу лицо...`;
+                  status.style.color = '#FFCC00'; status.style.borderColor = '#FFCC00';
                 }
 
-                // Логика подсчета (Кончики пальцев: 8, 12, 16, 20. Суставы под ними: 6, 10, 14, 18)
-                const tips = [8, 12, 16, 20];
-                const pips = [6, 10, 14, 18];
+                // === СЧИТАЕМ ПАЛЬЦЫ ===
+                let openFingers = 0;
+                let handDetected = false;
                 
-                // Проверяем 4 пальца (если кончик выше сустава -> палец поднят)
-                for (let i = 0; i < 4; i++) {
-                  if (handLms[tips[i]].y < handLms[pips[i]].y) openFingers++;
-                }
-                
-                // Проверяем большой палец (по расстоянию от кончика до запястья)
-                const thumbToWrist = Math.hypot(handLms[4].x - handLms[0].x, handLms[4].y - handLms[0].y);
-                const jointToWrist = Math.hypot(handLms[3].x - handLms[0].x, handLms[3].y - handLms[0].y);
-                if (thumbToWrist > jointToWrist) openFingers++;
-              }
+                if (latestHands && latestHands.multiHandLandmarks && latestHands.multiHandLandmarks.length > 0) {
+                  handDetected = true;
+                  const handLms = latestHands.multiHandLandmarks[0];
+                  
+                  ctx.fillStyle = '#FF00FF'; // Розовые точки на суставы
+                  for (let i = 0; i < handLms.length; i++) {
+                    ctx.beginPath(); ctx.arc(handLms[i].x * canvas.width, handLms[i].y * canvas.height, 4, 0, 2*Math.PI); ctx.fill();
+                  }
 
-              // ОБНОВЛЯЕМ ТЕКСТ СЧЕТЧИКА
-              if (openFingers > 0) {
-                fingerCounter.innerText = `Пальцев: ${openFingers}`;
-                fingerCounter.style.color = '#00FF66';
-                fingerCounter.style.borderColor = '#00FF66';
-                fingerCounter.style.boxShadow = '0 0 15px rgba(0,255,102,0.5)';
-              } else {
-                fingerCounter.innerText = 'покажи руку бля';
-                fingerCounter.style.color = '#FF3333';
-                fingerCounter.style.borderColor = '#FF3333';
-                fingerCounter.style.boxShadow = '0 0 15px rgba(255,51,51,0.5)';
+                  const tips = [8, 12, 16, 20];
+                  const pips = [6, 10, 14, 18];
+                  for (let i = 0; i < 4; i++) {
+                    if (handLms[tips[i]].y < handLms[pips[i]].y) openFingers++;
+                  }
+                  
+                  const thumbToWrist = Math.hypot(handLms[4].x - handLms[0].x, handLms[4].y - handLms[0].y);
+                  const jointToWrist = Math.hypot(handLms[3].x - handLms[0].x, handLms[3].y - handLms[0].y);
+                  if (thumbToWrist > jointToWrist) openFingers++;
+                }
+
+                // ЛОГИКА ТВОЕЙ ФРАЗЫ
+                if (handDetected && openFingers > 0) {
+                  fingerCounter.innerText = `Пальцев: ${openFingers}`;
+                  fingerCounter.style.color = '#00FF66';
+                  fingerCounter.style.borderColor = '#00FF66';
+                  fingerCounter.style.boxShadow = '0 0 15px rgba(0,255,102,0.5)';
+                } else {
+                  // Если рука в кулаке (openFingers == 0) или руки вообще нет в кадре
+                  fingerCounter.innerText = 'покажи руку бля';
+                  fingerCounter.style.color = '#FF3333';
+                  fingerCounter.style.borderColor = '#FF3333';
+                  fingerCounter.style.boxShadow = '0 0 15px rgba(255,51,51,0.5)';
+                }
               }
+            } catch (loopErr) {
+              status.innerText = "Ошибка кадра: " + loopErr.message;
             }
             
-            // Таймер передышки для телефона (40мс)
+            // Задержка 40мс, чтобы процессор не сгорел
             setTimeout(() => { requestAnimationFrame(processVideo); }, 40);
           }
           
           processVideo();
         };
-      } catch (e) {
-        status.innerText = "Ошибка: " + e.message;
+      } catch (camErr) {
+        status.innerText = "Ошибка камеры: " + camErr.message;
       }
     };
   </script>
