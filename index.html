@@ -1,187 +1,284 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Face & Hands Light</title>
-  <style>
-    body { margin: 0; background: #000; overflow: hidden; color: #fff; font-family: sans-serif; }
-    video, canvas { position: absolute; width: 100vw; height: 100vh; object-fit: cover; }
-    video { z-index: 1; }
-    canvas { z-index: 2; pointer-events: none; }
-    
-    #status {
-      position: absolute; top: 15px; left: 50%; transform: translateX(-50%); z-index: 10;
-      background: rgba(0,0,0,0.8); color: #0FF; padding: 10px 15px; border-radius: 12px; 
-      font-size: 14px; border: 1px solid #0FF; white-space: nowrap; text-align: center;
-    }
-    
-    #fingerCounter {
-      position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 15;
-      background: rgba(0,0,0,0.9); color: #FF3333; padding: 15px 30px; border-radius: 20px; 
-      font-size: 24px; font-weight: bold; border: 2px solid #FF3333; text-transform: uppercase;
-      box-shadow: 0 0 15px rgba(255,51,51,0.5); text-align: center; white-space: nowrap;
-    }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Face Mesh — сеточная маска лица</title>
+<style>
+  :root{
+    --bg: #05080a;
+    --panel: #0c1416;
+    --line: #163024;
+    --accent: #39ff9d;   /* неоново-зелёный — цвет сетки */
+    --accent-2: #24e0ff; /* циан — акцентные контуры (глаза/губы/овал) */
+    --text: #d9fbe8;
+    --muted: #5f8f7c;
+  }
+  *{ box-sizing: border-box; }
+  html, body{
+    margin:0; padding:0; height:100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', ui-monospace, Consolas, monospace;
+  }
+  body{
+    display:flex; flex-direction:column; align-items:center;
+    min-height:100vh; padding: 24px 16px 40px;
+  }
+  header{
+    width:100%; max-width: 720px;
+    display:flex; align-items:baseline; justify-content:space-between;
+    margin-bottom: 14px;
+  }
+  h1{
+    font-size: 15px; letter-spacing: 3px; text-transform: uppercase;
+    margin:0; color: var(--accent);
+    font-weight: 600;
+  }
+  h1 span{ color: var(--muted); }
+  #status-badge{
+    font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 3px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  #status-badge.active{ color: var(--accent); border-color: var(--accent); }
+  #status-badge.error{ color: #ff5c5c; border-color: #ff5c5c; }
 
-    #btn {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 20;
-      padding: 15px 40px; background: #0FF; color: #000; font-weight: bold; border: none; 
-      border-radius: 30px; font-size: 20px; cursor: pointer; box-shadow: 0 0 20px rgba(0,255,255,0.4);
-    }
-  </style>
+  .stage{
+    position: relative;
+    width: 100%; max-width: 720px;
+    aspect-ratio: 4 / 3;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .mirror{
+    position:absolute; inset:0;
+    transform: scaleX(-1); /* зеркалим и видео, и канвас вместе — координаты не расходятся */
+  }
+  video, canvas{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    display:block;
+    object-fit: cover;
+  }
+  video{ opacity: 0.85; }
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  /* декоративная сетка-разметка вокруг сцены, в духе "скан-интерфейса" */
+  .stage::before{
+    content:"";
+    position:absolute; inset:0;
+    pointer-events:none;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity: 0.25;
+    z-index: 2;
+  }
+  .corner{
+    position:absolute; width:18px; height:18px;
+    border: 2px solid var(--accent);
+    opacity:0.8; z-index:3; pointer-events:none;
+  }
+  .corner.tl{ top:8px; left:8px; border-right:none; border-bottom:none; }
+  .corner.tr{ top:8px; right:8px; border-left:none; border-bottom:none; }
+  .corner.bl{ bottom:8px; left:8px; border-right:none; border-top:none; }
+  .corner.br{ bottom:8px; right:8px; border-left:none; border-top:none; }
+
+  .overlay-msg{
+    position:absolute; inset:0; z-index:4;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:14px; text-align:center; padding: 20px;
+    background: rgba(5,8,10,0.88);
+  }
+  .overlay-msg.hidden{ display:none; }
+  .overlay-msg p{ margin:0; font-size:13px; color: var(--muted); max-width: 420px; line-height:1.6; }
+
+  button{
+    font-family: inherit;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 10px 22px;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  button:hover{ background: var(--accent); color: #04140c; }
+  button:disabled{ opacity:0.4; cursor:default; background:none; color:var(--accent); }
+
+  footer{
+    width:100%; max-width: 720px;
+    margin-top: 14px;
+    display:flex; justify-content:space-between;
+    font-size: 11px; color: var(--muted); letter-spacing: 0.5px;
+  }
+  #face-count{ color: var(--accent-2); }
+
+  @media (prefers-reduced-motion: reduce){
+    button{ transition:none; }
+  }
+</style>
 </head>
 <body>
 
-  <div id="status">Ожидание запуска...</div>
-  <div id="fingerCounter" style="display: none;">ПОКАЖИ РУКУ БЛЯ</div>
-  <button id="btn">Запустить сканер</button>
-  
-  <video id="video" playsinline autoplay muted></video>
-  <canvas id="canvas"></canvas>
+  <header>
+    <h1>Face Mesh <span>// сеточная маска</span></h1>
+    <div id="status-badge">инициализация</div>
+  </header>
+
+  <div class="stage" id="stage">
+    <div class="mirror">
+      <video id="video" playsinline autoplay muted></video>
+      <canvas id="canvas"></canvas>
+    </div>
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+
+    <div class="overlay-msg" id="start-overlay">
+      <p>Нужен доступ к камере, чтобы построить полигональную сетку по точкам лица (468 точек, MediaPipe Face Mesh). Обработка идёт локально в браузере — видео никуда не отправляется.</p>
+      <button id="start-btn">Разрешить камеру</button>
+    </div>
+  </div>
+
+  <footer>
+    <span id="fps-counter">fps: —</span>
+    <span id="face-count">лиц не обнаружено</span>
+  </footer>
+
+  <!-- MediaPipe Face Mesh -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.js" crossorigin="anonymous"></script>
 
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const status = document.getElementById('status');
-    const fingerCounter = document.getElementById('fingerCounter');
-    const btn = document.getElementById('btn');
+    const videoEl = document.getElementById('video');
+    const canvasEl = document.getElementById('canvas');
+    const ctx = canvasEl.getContext('2d');
+    const statusBadge = document.getElementById('status-badge');
+    const startOverlay = document.getElementById('start-overlay');
+    const startBtn = document.getElementById('start-btn');
+    const faceCountEl = document.getElementById('face-count');
+    const fpsEl = document.getElementById('fps-counter');
 
-    let framesCount = 0;
-    let latestFace = null;
-    let latestHands = null;
+    let camera = null;
+    let lastFrameTime = performance.now();
 
-    btn.onclick = async () => {
-      btn.style.display = 'none';
-      fingerCounter.style.display = 'block';
-      status.innerText = "Включение камеры...";
+    function setStatus(text, mode){
+      statusBadge.textContent = text;
+      statusBadge.classList.remove('active', 'error');
+      if(mode) statusBadge.classList.add(mode);
+    }
 
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } 
-        });
-        video.srcObject = stream;
-        
-        video.onloadeddata = async () => {
-          await video.play();
-          
-          try {
-            status.innerText = "Инициализация лица...";
-            const faceMesh = new FaceMesh({ 
-              locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` 
-            });
-            faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
-            faceMesh.onResults((res) => { latestFace = res; });
+    // Настройка FaceMesh: загружаем модель и её wasm-файлы с CDN
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`
+    });
 
-            status.innerText = "Инициализация рук...";
-            const hands = new Hands({ 
-              locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` 
-            });
-            hands.setOptions({ maxNumHands: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
-            hands.onResults((res) => { latestHands = res; });
+    faceMesh.setOptions({
+      maxNumFaces: 1,          // сколько лиц ищем одновременно
+      refineLandmarks: true,   // уточнённые точки глаз/губ (нужно для радужки)
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
 
-            // Даем паузу системе на выделение памяти
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            status.innerText = "Система готова! Сканирование...";
+    faceMesh.onResults(onResults);
 
-            // Главный цикл с защитой от перегруза
-            async function processVideo() {
-              if (!video.paused && !video.ended) {
-                framesCount++;
-                
-                // Отправляем кадры по очереди, а не одновременно, чтобы телефон не падал
-                try {
-                  await faceMesh.send({ image: video });
-                  await hands.send({ image: video });
-                } catch (err) {
-                  console.log("Ошибка кадра пропущена:", err);
-                }
-                
-                if (canvas.width !== video.videoWidth) {
-                  canvas.width = video.videoWidth; 
-                  canvas.height = video.videoHeight;
-                }
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                
-                // === РИСУЕМ ЛИЦО ===
-                if (latestFace && latestFace.multiFaceLandmarks && latestFace.multiFaceLandmarks.length > 0) {
-                  status.innerText = `[Кадр: ${framesCount}] Лицо найдено ✓`;
-                  status.style.color = '#00FF00'; status.style.borderColor = '#00FF00';
-                  
-                  const faceLms = latestFace.multiFaceLandmarks[0];
-                  ctx.strokeStyle = '#00FF66';
-                  ctx.lineWidth = 1;
-                  
-                  if (typeof FACEMESH_TESSELLATION !== 'undefined') {
-                    ctx.beginPath();
-                    for (const connection of FACEMESH_TESSELLATION) {
-                      const start = faceLms[connection[0]];
-                      const end = faceLms[connection[1]];
-                      ctx.moveTo(start.x * canvas.width, start.y * canvas.height);
-                      ctx.lineTo(end.x * canvas.width, end.y * canvas.height);
-                    }
-                    ctx.stroke();
-                  }
-                } else {
-                  status.innerText = `[Кадр: ${framesCount}] Ищу лицо...`;
-                  status.style.color = '#FFCC00'; status.style.borderColor = '#FFCC00';
-                }
-
-                // === СЧИТАЕМ ПАЛЬЦЫ ===
-                let openFingers = 0;
-                let handDetected = false;
-                
-                if (latestHands && latestHands.multiHandLandmarks && latestHands.multiHandLandmarks.length > 0) {
-                  handDetected = true;
-                  const handLms = latestHands.multiHandLandmarks[0];
-                  
-                  ctx.fillStyle = '#FF00FF';
-                  for (let i = 0; i < handLms.length; i++) {
-                    ctx.beginPath(); ctx.arc(handLms[i].x * canvas.width, handLms[i].y * canvas.height, 4, 0, 2*Math.PI); ctx.fill();
-                  }
-
-                  const tips = [8, 12, 16, 20];
-                  const pips = [6, 10, 14, 18];
-                  for (let i = 0; i < 4; i++) {
-                    if (handLms[tips[i]].y < handLms[pips[i]].y) openFingers++;
-                  }
-                  
-                  const thumbToWrist = Math.hypot(handLms[4].x - handLms[0].x, handLms[4].y - handLms[0].y);
-                  const jointToWrist = Math.hypot(handLms[3].x - handLms[0].x, handLms[3].y - handLms[0].y);
-                  if (thumbToWrist > jointToWrist) openFingers++;
-                }
-
-                if (handDetected && openFingers > 0) {
-                  fingerCounter.innerText = `Пальцев: ${openFingers}`;
-                  fingerCounter.style.color = '#00FF66';
-                  fingerCounter.style.borderColor = '#00FF66';
-                  fingerCounter.style.boxShadow = '0 0 15px rgba(0,255,102,0.5)';
-                } else {
-                  fingerCounter.innerText = 'покажи руку бля';
-                  fingerCounter.style.color = '#FF3333';
-                  fingerCounter.style.borderColor = '#FF3333';
-                  fingerCounter.style.boxShadow = '0 0 15px rgba(255,51,51,0.5)';
-                }
-              }
-              
-              // Увеличили задержку до 60мс, чтобы дать процессору телефона передохнуть и не вызывать падение памяти
-              setTimeout(() => { requestAnimationFrame(processVideo); }, 60);
-            }
-            
-            processVideo();
-
-          } catch (initErr) {
-            status.innerText = "Ошибка ИИ: " + initErr.message;
-            status.style.color = 'red';
-          }
-        };
-      } catch (camErr) {
-        status.innerText = "Ошибка камеры: " + camErr.message;
+    function onResults(results){
+      // синхронизируем разрешение канваса с реальным видеопотоком
+      if(canvasEl.width !== results.image.width || canvasEl.height !== results.image.height){
+        canvasEl.width = results.image.width;
+        canvasEl.height = results.image.height;
       }
-    };
+
+      ctx.save();
+      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+      const landmarksList = results.multiFaceLandmarks || [];
+
+      if(landmarksList.length > 0){
+        faceCountEl.textContent = `обнаружено лиц: ${landmarksList.length}`;
+        setStatus('лицо обнаружено', 'active');
+
+        for(const landmarks of landmarksList){
+          // 1) сама полигональная сетка (тесселяция) — тонкие треугольники по всему лицу
+          drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {
+            color: 'rgba(57, 255, 157, 0.55)',
+            lineWidth: 1
+          });
+
+          // 2) акцентные контуры поверх сетки — овал лица, глаза, брови, губы
+          drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL,   { color: '#24e0ff', lineWidth: 1.5 });
+          drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE,    { color: '#24e0ff', lineWidth: 1.5 });
+          drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE,   { color: '#24e0ff', lineWidth: 1.5 });
+          drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYEBROW,{ color: '#24e0ff', lineWidth: 1.5 });
+          drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYEBROW,{ color: '#24e0ff', lineWidth: 1.5 });
+          drawConnectors(ctx, landmarks, FACEMESH_LIPS,        { color: '#24e0ff', lineWidth: 1.5 });
+
+          // 3) радужка глаз (доступна благодаря refineLandmarks: true)
+          if(FACEMESH_LEFT_IRIS && FACEMESH_RIGHT_IRIS){
+            drawConnectors(ctx, landmarks, FACEMESH_LEFT_IRIS,  { color: '#ffffff', lineWidth: 1 });
+            drawConnectors(ctx, landmarks, FACEMESH_RIGHT_IRIS, { color: '#ffffff', lineWidth: 1 });
+          }
+
+          // 4) сами узлы сетки — мелкие точки поверх линий
+          drawLandmarks(ctx, landmarks, {
+            color: '#39ff9d',
+            fillColor: '#39ff9d',
+            radius: 0.8
+          });
+        }
+      } else {
+        faceCountEl.textContent = 'лицо не обнаружено';
+        setStatus('поиск лица…', null);
+      }
+
+      ctx.restore();
+
+      // простой счётчик fps
+      const now = performance.now();
+      const fps = 1000 / (now - lastFrameTime);
+      lastFrameTime = now;
+      fpsEl.textContent = `fps: ${fps.toFixed(0)}`;
+    }
+
+    startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      startBtn.textContent = 'Запрашиваем доступ…';
+      setStatus('запрос доступа к камере', null);
+
+      try{
+        camera = new Camera(videoEl, {
+          onFrame: async () => {
+            await faceMesh.send({ image: videoEl });
+          },
+          width: 1280,
+          height: 960
+        });
+        await camera.start();
+
+        startOverlay.classList.add('hidden');
+        setStatus('камера активна', 'active');
+      } catch(err){
+        console.error(err);
+        setStatus('доступ к камере отклонён', 'error');
+        startBtn.disabled = false;
+        startBtn.textContent = 'Повторить попытку';
+
+        const p = startOverlay.querySelector('p');
+        p.textContent = 'Не удалось получить доступ к камере. Проверьте, что сайт открыт по HTTPS (или localhost) и что разрешение на камеру не заблокировано в настройках браузера. Затем нажмите кнопку ещё раз.';
+      }
+    });
   </script>
+
 </body>
 </html>
