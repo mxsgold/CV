@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Face Mesh Web</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  </style>
+  <!-- Подключаем MediaPipe и Camera Utils через CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="container">
+  <video id="webcam" playsinline></video>
+  <canvas id="output_canvas"></canvas>
+</div>
+
+<script>
+  const videoElement = document.getElementById('webcam');
+  const canvasElement = document.getElementById('output_canvas');
+  const canvasCtx = canvasElement.getContext('2d');
+
+  function resizeCanvas() {
+    canvasElement.width = window.innerWidth;
+    canvasElement.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  const faceMesh = new FaceMesh({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+  });
+
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5
+  });
+
+  faceMesh.onResults((results) => {
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+    if (results.multiFaceLandmarks) {
+      for (const landmarks of results.multiFaceLandmarks) {
+        // Отрисовка связей (полигональной сетки)
+        for (const connection of FACEMESH_TESSELLATION) {
+          const start = landmarks[connection[0]];
+          const end = landmarks[connection[1]];
+
+          canvasCtx.beginPath();
+          canvasCtx.moveTo(start.x * canvasElement.width, start.y * canvasElement.height);
+          canvasCtx.lineTo(end.x * canvasElement.width, end.y * canvasElement.height);
+          canvasCtx.strokeStyle = '#00FF00'; // Зеленый цвет сетки
+          canvasCtx.lineWidth = 1;
+          canvasCtx.stroke();
+        }
+      }
+    }
+    canvasCtx.restore();
+  });
+
+  // Запуск камеры (по умолчанию фронтальная 'user')
+  const camera = new Camera(videoElement, {
+    onFrame: async () => {
+      await faceMesh.send({image: videoElement});
+    },
+    facingMode: 'user',
+    width: 1280,
+    height: 720
+  });
+
+  camera.start();
+</script>
+</body>
+</html>
