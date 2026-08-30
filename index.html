@@ -11,7 +11,7 @@
     --line: #163024;
     --accent: #39ff9d;   /* неоново-зелёный — сетка лица */
     --accent-2: #24e0ff; /* циан — контуры лица (глаза/губы/овал) */
-    --accent-3: #ffb454; /* янтарный — сетка руки */
+    --accent-3: #ff3b3b; /* красный — костная модель руки */
     --text: #d9fbe8;
     --muted: #5f8f7c;
   }
@@ -245,6 +245,89 @@
       return count;
     }
 
+    // Явный список "костей" руки: [сустав A, сустав B, толщина].
+    // Толщина уменьшается от ладони к кончикам пальцев, как у
+    // настоящих фаланг — это и создаёт ощущение анатомической модели.
+    const HAND_BONES = [
+      [0,1,3.0], [1,2,2.6], [2,3,2.1], [3,4,1.6],       // большой палец
+      [0,5,3.2], [5,6,2.6], [6,7,2.1], [7,8,1.6],       // указательный
+      [5,9,3.0], [9,10,2.6], [10,11,2.1], [11,12,1.6],  // средний
+      [9,13,3.0],[13,14,2.6],[14,15,2.1],[15,16,1.6],   // безымянный
+      [13,17,3.0],[17,18,2.6],[18,19,2.1],[19,20,1.6],  // мизинец
+      [0,17,3.0]                                         // основание ладони
+    ];
+
+    function jointRadiusFor(idx){
+      if(idx === 0) return 5.5;                              // запястье
+      if([1,5,9,13,17].includes(idx)) return 4.2;            // костяшки (MCP)
+      if([2,6,10,14,18].includes(idx)) return 3.4;           // средние суставы
+      if([3,7,11,15,19].includes(idx)) return 2.8;           // предпоследние суставы
+      return 2.4;                                            // кончики пальцев
+    }
+
+    function toPx(lm){
+      return { x: lm.x * canvasEl.width, y: lm.y * canvasEl.height };
+    }
+
+    // Рисуем кость как гранёный "капсульный" сегмент с поперечным
+    // градиентом — это даёт иллюзию объёма (цилиндра), а не плоской линии.
+    function drawBone(p1, p2, width){
+      const dx = p2.x - p1.x, dy = p2.y - p1.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const nx = -uy, ny = ux;
+      const inset = width * 0.9; // не доходим до центра сустава, чтобы был виден шарик
+      const ax = p1.x + ux * inset, ay = p1.y + uy * inset;
+      const bx = p2.x - ux * inset, by = p2.y - uy * inset;
+
+      const grad = ctx.createLinearGradient(ax + nx * width, ay + ny * width, ax - nx * width, ay - ny * width);
+      grad.addColorStop(0,   'rgba(90, 0, 0, 0.9)');
+      grad.addColorStop(0.5, 'rgba(255, 45, 45, 0.98)');
+      grad.addColorStop(1,   'rgba(90, 0, 0, 0.9)');
+
+      ctx.beginPath();
+      ctx.moveTo(ax + nx * width, ay + ny * width);
+      ctx.lineTo(bx + nx * width, by + ny * width);
+      ctx.lineTo(bx - nx * width, by - ny * width);
+      ctx.lineTo(ax - nx * width, ay - ny * width);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
+    // Сустав — шарик с радиальным градиентом и бликом, как гладкая кость.
+    function drawJoint(p, radius){
+      const grad = ctx.createRadialGradient(
+        p.x - radius * 0.35, p.y - radius * 0.35, radius * 0.15,
+        p.x, p.y, radius
+      );
+      grad.addColorStop(0,   '#ffe8e8');
+      grad.addColorStop(0.45,'#ff3b3b');
+      grad.addColorStop(1,   '#7a0000');
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
+    function drawHandSkeleton(landmarks){
+      const points = landmarks.map(toPx);
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(255, 20, 20, 0.65)';
+      ctx.shadowBlur = 10;
+
+      for(const [a, b, width] of HAND_BONES){
+        drawBone(points[a], points[b], width);
+      }
+      for(let i = 0; i < points.length; i++){
+        drawJoint(points[i], jointRadiusFor(i));
+      }
+
+      ctx.restore();
+    }
+
     function render(){
       ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 
@@ -270,12 +353,7 @@
       let totalFingers = 0;
       const perHand = [];
       for(const landmarks of latestHandLandmarks){
-        drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
-          color: 'rgba(255, 180, 84, 0.85)', lineWidth: 2
-        });
-        drawLandmarks(ctx, landmarks, {
-          color: '#ffb454', fillColor: '#ffd08a', radius: 2.5
-        });
+        drawHandSkeleton(landmarks);
         const n = countExtendedFingers(landmarks);
         perHand.push(n);
         totalFingers += n;
