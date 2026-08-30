@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Face & Hands Pro</title>
+  <title>Face & Hands Light</title>
   <style>
     body { margin: 0; background: #000; overflow: hidden; color: #fff; font-family: sans-serif; }
     video, canvas { position: absolute; width: 100vw; height: 100vh; object-fit: cover; }
@@ -30,14 +30,13 @@
     }
   </style>
 
-  <!-- Библиотеки -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
   <div id="status">Ожидание запуска...</div>
-  <div id="fingerCounter" style="display: none;">ЖДИТЕ...</div>
+  <div id="fingerCounter" style="display: none;">ПОКАЖИ РУКУ БЛЯ</div>
   <button id="btn">Запустить сканер</button>
   
   <video id="video" playsinline autoplay muted></video>
@@ -61,64 +60,61 @@
       status.innerText = "Включение камеры...";
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } 
+        });
         video.srcObject = stream;
         
         video.onloadeddata = async () => {
-          await video.play().catch(e => console.log(e));
+          await video.play();
           
           try {
-            // Инициализация моделей
-            status.innerText = "Подготовка ИИ...";
-            
-            const faceMesh = new FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-            faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+            status.innerText = "Инициализация лица...";
+            const faceMesh = new FaceMesh({ 
+              locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` 
+            });
+            faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: false, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
             faceMesh.onResults((res) => { latestFace = res; });
 
-            const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-            hands.setOptions({ maxNumHands: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+            status.innerText = "Инициализация рук...";
+            const hands = new Hands({ 
+              locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` 
+            });
+            hands.setOptions({ maxNumHands: 1, minDetectionConfidence: 0.4, minTrackingConfidence: 0.4 });
             hands.onResults((res) => { latestHands = res; });
 
-            // ПРОГРЕВ (Именно тут скачиваются файлы, делаем по очереди)
-            status.innerText = "Прогрев Лица (1/2) - ждите...";
-            await faceMesh.send({ image: video });
-            
-            status.innerText = "Прогрев Рук (2/2) - ждите...";
-            await hands.send({ image: video });
-            
-          } catch (initErr) {
-            status.innerText = "Ошибка загрузки ИИ: " + initErr.message;
-            status.style.color = 'red';
-            return; // Останавливаем, если телефон не потянул
-          }
+            // Даем паузу системе на выделение памяти
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            status.innerText = "Система готова! Сканирование...";
 
-          status.innerText = "Запуск успешно завершен!";
-          
-          // ГЛАВНЫЙ ЦИКЛ
-          async function processVideo() {
-            try {
+            // Главный цикл с защитой от перегруза
+            async function processVideo() {
               if (!video.paused && !video.ended) {
                 framesCount++;
                 
-                // Запускаем анализ
-                await faceMesh.send({ image: video });
-                await hands.send({ image: video });
+                // Отправляем кадры по очереди, а не одновременно, чтобы телефон не падал
+                try {
+                  await faceMesh.send({ image: video });
+                  await hands.send({ image: video });
+                } catch (err) {
+                  console.log("Ошибка кадра пропущена:", err);
+                }
                 
                 if (canvas.width !== video.videoWidth) {
-                  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                  canvas.width = video.videoWidth; 
+                  canvas.height = video.videoHeight;
                 }
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
                 // === РИСУЕМ ЛИЦО ===
                 if (latestFace && latestFace.multiFaceLandmarks && latestFace.multiFaceLandmarks.length > 0) {
-                  status.innerText = `[Кадр: ${framesCount}] Сканирование ✓`;
+                  status.innerText = `[Кадр: ${framesCount}] Лицо найдено ✓`;
                   status.style.color = '#00FF00'; status.style.borderColor = '#00FF00';
                   
                   const faceLms = latestFace.multiFaceLandmarks[0];
                   ctx.strokeStyle = '#00FF66';
                   ctx.lineWidth = 1;
                   
-                  // Защита: если полигоны доступны - рисуем сетку, иначе рисуем точки
                   if (typeof FACEMESH_TESSELLATION !== 'undefined') {
                     ctx.beginPath();
                     for (const connection of FACEMESH_TESSELLATION) {
@@ -128,11 +124,6 @@
                       ctx.lineTo(end.x * canvas.width, end.y * canvas.height);
                     }
                     ctx.stroke();
-                  } else {
-                    ctx.fillStyle = '#00FF66';
-                    for (let i = 0; i < faceLms.length; i+=2) {
-                      ctx.beginPath(); ctx.arc(faceLms[i].x * canvas.width, faceLms[i].y * canvas.height, 2, 0, 2*Math.PI); ctx.fill();
-                    }
                   }
                 } else {
                   status.innerText = `[Кадр: ${framesCount}] Ищу лицо...`;
@@ -147,7 +138,7 @@
                   handDetected = true;
                   const handLms = latestHands.multiHandLandmarks[0];
                   
-                  ctx.fillStyle = '#FF00FF'; // Розовые точки на суставы
+                  ctx.fillStyle = '#FF00FF';
                   for (let i = 0; i < handLms.length; i++) {
                     ctx.beginPath(); ctx.arc(handLms[i].x * canvas.width, handLms[i].y * canvas.height, 4, 0, 2*Math.PI); ctx.fill();
                   }
@@ -163,29 +154,29 @@
                   if (thumbToWrist > jointToWrist) openFingers++;
                 }
 
-                // ЛОГИКА ТВОЕЙ ФРАЗЫ
                 if (handDetected && openFingers > 0) {
                   fingerCounter.innerText = `Пальцев: ${openFingers}`;
                   fingerCounter.style.color = '#00FF66';
                   fingerCounter.style.borderColor = '#00FF66';
                   fingerCounter.style.boxShadow = '0 0 15px rgba(0,255,102,0.5)';
                 } else {
-                  // Если рука в кулаке (openFingers == 0) или руки вообще нет в кадре
                   fingerCounter.innerText = 'покажи руку бля';
                   fingerCounter.style.color = '#FF3333';
                   fingerCounter.style.borderColor = '#FF3333';
                   fingerCounter.style.boxShadow = '0 0 15px rgba(255,51,51,0.5)';
                 }
               }
-            } catch (loopErr) {
-              status.innerText = "Ошибка кадра: " + loopErr.message;
+              
+              // Увеличили задержку до 60мс, чтобы дать процессору телефона передохнуть и не вызывать падение памяти
+              setTimeout(() => { requestAnimationFrame(processVideo); }, 60);
             }
             
-            // Задержка 40мс, чтобы процессор не сгорел
-            setTimeout(() => { requestAnimationFrame(processVideo); }, 40);
+            processVideo();
+
+          } catch (initErr) {
+            status.innerText = "Ошибка ИИ: " + initErr.message;
+            status.style.color = 'red';
           }
-          
-          processVideo();
         };
       } catch (camErr) {
         status.innerText = "Ошибка камеры: " + camErr.message;
