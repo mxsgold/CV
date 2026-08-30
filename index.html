@@ -3,14 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Face Mesh — сеточная маска лица</title>
+<title>BY VUSAL</title>
 <style>
   :root{
     --bg: #05080a;
     --panel: #0c1416;
     --line: #163024;
-    --accent: #39ff9d;   /* неоново-зелёный — цвет сетки */
-    --accent-2: #24e0ff; /* циан — акцентные контуры (глаза/губы/овал) */
+    --accent: #39ff9d;   /* неоново-зелёный — сетка лица */
+    --accent-2: #24e0ff; /* циан — контуры лица (глаза/губы/овал) */
+    --accent-3: #ffb454; /* янтарный — сетка руки */
     --text: #d9fbe8;
     --muted: #5f8f7c;
   }
@@ -57,7 +58,7 @@
   }
   .mirror{
     position:absolute; inset:0;
-    transform: scaleX(-1); /* зеркалим и видео, и канвас вместе — координаты не расходятся */
+    transform: scaleX(-1); /* зеркалим видео и канвас вместе, координаты не расходятся */
   }
   video, canvas{
     position:absolute; inset:0;
@@ -67,7 +68,6 @@
   }
   video{ opacity: 0.85; }
 
-  /* декоративная сетка-разметка вокруг сцены, в духе "скан-интерфейса" */
   .stage::before{
     content:"";
     position:absolute; inset:0;
@@ -96,7 +96,7 @@
     background: rgba(5,8,10,0.88);
   }
   .overlay-msg.hidden{ display:none; }
-  .overlay-msg p{ margin:0; font-size:13px; color: var(--muted); max-width: 420px; line-height:1.6; }
+  .overlay-msg p{ margin:0; font-size:13px; color: var(--muted); max-width: 440px; line-height:1.6; }
 
   button{
     font-family: inherit;
@@ -114,13 +114,35 @@
   button:hover{ background: var(--accent); color: #04140c; }
   button:disabled{ opacity:0.4; cursor:default; background:none; color:var(--accent); }
 
+  .panels{
+    width:100%; max-width: 720px;
+    display:flex; gap: 10px; margin-top: 14px;
+  }
+  .panel{
+    flex:1;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 12px 14px;
+    background: var(--panel);
+  }
+  .panel .label{
+    font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 6px;
+  }
+  .panel .value{
+    font-size: 28px; font-weight: 700; color: var(--accent-3);
+    line-height: 1;
+  }
+  .panel .value small{
+    font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 6px;
+  }
+
   footer{
     width:100%; max-width: 720px;
-    margin-top: 14px;
+    margin-top: 10px;
     display:flex; justify-content:space-between;
     font-size: 11px; color: var(--muted); letter-spacing: 0.5px;
   }
-  #face-count{ color: var(--accent-2); }
 
   @media (prefers-reduced-motion: reduce){
     button{ transition:none; }
@@ -130,7 +152,7 @@
 <body>
 
   <header>
-    <h1>Face Mesh <span>// сеточная маска</span></h1>
+    <h1>BY VUSAL</h1>
     <div id="status-badge">инициализация</div>
   </header>
 
@@ -145,18 +167,30 @@
     <div class="corner br"></div>
 
     <div class="overlay-msg" id="start-overlay">
-      <p>Нужен доступ к камере, чтобы построить полигональную сетку по точкам лица (468 точек, MediaPipe Face Mesh). Обработка идёт локально в браузере — видео никуда не отправляется.</p>
+      <p>Нужен доступ к камере: строим сетку по 468 точкам лица и по 21 точке (суставам) каждой руки — MediaPipe Face Mesh + Hands. Всё считается локально в браузере, видео никуда не отправляется.</p>
       <button id="start-btn">Разрешить камеру</button>
+    </div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <div class="label">Лиц обнаружено</div>
+      <div class="value" id="face-count">0</div>
+    </div>
+    <div class="panel">
+      <div class="label">Пальцев поднято</div>
+      <div class="value" id="finger-count">—<small id="finger-breakdown"></small></div>
     </div>
   </div>
 
   <footer>
     <span id="fps-counter">fps: —</span>
-    <span id="face-count">лиц не обнаружено</span>
+    <span id="hand-status">рук не обнаружено</span>
   </footer>
 
-  <!-- MediaPipe Face Mesh -->
+  <!-- MediaPipe Face Mesh + Hands -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/hands.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.js" crossorigin="anonymous"></script>
 
@@ -168,10 +202,18 @@
     const startOverlay = document.getElementById('start-overlay');
     const startBtn = document.getElementById('start-btn');
     const faceCountEl = document.getElementById('face-count');
+    const fingerCountEl = document.getElementById('finger-count');
+    const fingerBreakdownEl = document.getElementById('finger-breakdown');
+    const handStatusEl = document.getElementById('hand-status');
     const fpsEl = document.getElementById('fps-counter');
 
-    let camera = null;
     let lastFrameTime = performance.now();
+
+    // здесь храним самые свежие результаты каждой модели —
+    // рисуем их вместе в одной функции render(), чтобы модели
+    // не затирали холст друг у друга
+    let latestFaceLandmarks = [];
+    let latestHandLandmarks = [];
 
     function setStatus(text, mode){
       statusBadge.textContent = text;
@@ -179,77 +221,123 @@
       if(mode) statusBadge.classList.add(mode);
     }
 
-    // Настройка FaceMesh: загружаем модель и её wasm-файлы с CDN
+    function dist(a, b){
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    // Простой подсчёт разогнутых пальцев по 21 точке руки.
+    // Указательный/средний/безымянный/мизинец: палец разогнут,
+    // если кончик выше среднего сустава (работает, когда ладонь
+    // более-менее обращена к камере и рука не сильно наклонена).
+    // Большой палец считается отдельно: сравниваем, насколько
+    // кончик большого пальца удалён от основания мизинца —
+    // так подсчёт не зависит от того, левая рука или правая.
+    function countExtendedFingers(landmarks){
+      let count = 0;
+      const fingers = [[8, 6], [12, 10], [16, 14], [20, 18]];
+      for(const [tip, pip] of fingers){
+        if(landmarks[tip].y < landmarks[pip].y) count++;
+      }
+      const palmBase = landmarks[17];
+      const thumbDist = dist(landmarks[4], palmBase);
+      const thumbJointDist = dist(landmarks[3], palmBase);
+      if(thumbDist > thumbJointDist * 1.1) count++;
+      return count;
+    }
+
+    function render(){
+      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+      // --- лицо ---
+      for(const landmarks of latestFaceLandmarks){
+        drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {
+          color: 'rgba(57, 255, 157, 0.55)', lineWidth: 1
+        });
+        drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL,    { color: '#24e0ff', lineWidth: 1.5 });
+        drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE,     { color: '#24e0ff', lineWidth: 1.5 });
+        drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE,    { color: '#24e0ff', lineWidth: 1.5 });
+        drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYEBROW, { color: '#24e0ff', lineWidth: 1.5 });
+        drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYEBROW,{ color: '#24e0ff', lineWidth: 1.5 });
+        drawConnectors(ctx, landmarks, FACEMESH_LIPS,         { color: '#24e0ff', lineWidth: 1.5 });
+        if(typeof FACEMESH_LEFT_IRIS !== 'undefined'){
+          drawConnectors(ctx, landmarks, FACEMESH_LEFT_IRIS,  { color: '#ffffff', lineWidth: 1 });
+          drawConnectors(ctx, landmarks, FACEMESH_RIGHT_IRIS, { color: '#ffffff', lineWidth: 1 });
+        }
+        drawLandmarks(ctx, landmarks, { color: '#39ff9d', fillColor: '#39ff9d', radius: 0.8 });
+      }
+
+      // --- руки ---
+      let totalFingers = 0;
+      const perHand = [];
+      for(const landmarks of latestHandLandmarks){
+        drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {
+          color: 'rgba(255, 180, 84, 0.85)', lineWidth: 2
+        });
+        drawLandmarks(ctx, landmarks, {
+          color: '#ffb454', fillColor: '#ffd08a', radius: 2.5
+        });
+        const n = countExtendedFingers(landmarks);
+        perHand.push(n);
+        totalFingers += n;
+      }
+
+      // --- обновление панелей ---
+      faceCountEl.textContent = latestFaceLandmarks.length;
+
+      if(latestHandLandmarks.length > 0){
+        fingerCountEl.firstChild.textContent = totalFingers;
+        fingerBreakdownEl.textContent = perHand.length > 1
+          ? `(${perHand.join(' + ')})`
+          : '';
+        handStatusEl.textContent = `рук обнаружено: ${latestHandLandmarks.length}`;
+      } else {
+        fingerCountEl.firstChild.textContent = '—';
+        fingerBreakdownEl.textContent = '';
+        handStatusEl.textContent = 'рук не обнаружено';
+      }
+
+      if(latestFaceLandmarks.length > 0 || latestHandLandmarks.length > 0){
+        setStatus('объект обнаружен', 'active');
+      } else {
+        setStatus('поиск…', null);
+      }
+
+      const now = performance.now();
+      fpsEl.textContent = `fps: ${(1000 / (now - lastFrameTime)).toFixed(0)}`;
+      lastFrameTime = now;
+    }
+
     const faceMesh = new FaceMesh({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`
     });
-
     faceMesh.setOptions({
-      maxNumFaces: 1,          // сколько лиц ищем одновременно
-      refineLandmarks: true,   // уточнённые точки глаз/губ (нужно для радужки)
+      maxNumFaces: 1,
+      refineLandmarks: true,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6
     });
-
-    faceMesh.onResults(onResults);
-
-    function onResults(results){
-      // синхронизируем разрешение канваса с реальным видеопотоком
+    faceMesh.onResults((results) => {
       if(canvasEl.width !== results.image.width || canvasEl.height !== results.image.height){
         canvasEl.width = results.image.width;
         canvasEl.height = results.image.height;
       }
+      latestFaceLandmarks = results.multiFaceLandmarks || [];
+      render();
+    });
 
-      ctx.save();
-      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-
-      const landmarksList = results.multiFaceLandmarks || [];
-
-      if(landmarksList.length > 0){
-        faceCountEl.textContent = `обнаружено лиц: ${landmarksList.length}`;
-        setStatus('лицо обнаружено', 'active');
-
-        for(const landmarks of landmarksList){
-          // 1) сама полигональная сетка (тесселяция) — тонкие треугольники по всему лицу
-          drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {
-            color: 'rgba(57, 255, 157, 0.55)',
-            lineWidth: 1
-          });
-
-          // 2) акцентные контуры поверх сетки — овал лица, глаза, брови, губы
-          drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL,   { color: '#24e0ff', lineWidth: 1.5 });
-          drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE,    { color: '#24e0ff', lineWidth: 1.5 });
-          drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE,   { color: '#24e0ff', lineWidth: 1.5 });
-          drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYEBROW,{ color: '#24e0ff', lineWidth: 1.5 });
-          drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYEBROW,{ color: '#24e0ff', lineWidth: 1.5 });
-          drawConnectors(ctx, landmarks, FACEMESH_LIPS,        { color: '#24e0ff', lineWidth: 1.5 });
-
-          // 3) радужка глаз (доступна благодаря refineLandmarks: true)
-          if(FACEMESH_LEFT_IRIS && FACEMESH_RIGHT_IRIS){
-            drawConnectors(ctx, landmarks, FACEMESH_LEFT_IRIS,  { color: '#ffffff', lineWidth: 1 });
-            drawConnectors(ctx, landmarks, FACEMESH_RIGHT_IRIS, { color: '#ffffff', lineWidth: 1 });
-          }
-
-          // 4) сами узлы сетки — мелкие точки поверх линий
-          drawLandmarks(ctx, landmarks, {
-            color: '#39ff9d',
-            fillColor: '#39ff9d',
-            radius: 0.8
-          });
-        }
-      } else {
-        faceCountEl.textContent = 'лицо не обнаружено';
-        setStatus('поиск лица…', null);
-      }
-
-      ctx.restore();
-
-      // простой счётчик fps
-      const now = performance.now();
-      const fps = 1000 / (now - lastFrameTime);
-      lastFrameTime = now;
-      fpsEl.textContent = `fps: ${fps.toFixed(0)}`;
-    }
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4/${file}`
+    });
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6
+    });
+    hands.onResults((results) => {
+      latestHandLandmarks = results.multiHandLandmarks || [];
+      render();
+    });
 
     startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
@@ -257,9 +345,10 @@
       setStatus('запрос доступа к камере', null);
 
       try{
-        camera = new Camera(videoEl, {
+        const camera = new Camera(videoEl, {
           onFrame: async () => {
             await faceMesh.send({ image: videoEl });
+            await hands.send({ image: videoEl });
           },
           width: 1280,
           height: 960
